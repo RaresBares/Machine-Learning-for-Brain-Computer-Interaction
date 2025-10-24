@@ -99,3 +99,4 @@ def epoch_bandpower_fft(eeg, fs, events, tmin, tmax, bands={"mu": (8, 12), "beta
         feats.append(fb)
     feats = np.vstack(feats) if len(feats) else np.empty((0, x.shape[0] * len(bands)))
     return feats, ev
+
