@@ -5,34 +5,51 @@ def preprocess_eeg(eeg, fs, band=(1.0, 40.0), notch=None, reref="avg", zscore=Tr
     """
     Parameters
     ----------
-    eeg : numpy.ndarray
-        Shape (n_channels, n_samples), dtype float. Raw EEG.
-    fs : float or int
-        Sampling rate in Hz.
+    eeg : np.ndarray of Channel
+        Array of Channel objects; each `Channel.clean` is read and overwritten in-place.
+    fs : float | int | None
+        Sampling rate in Hz. If None, inferred from channels' `fs` (must all match).
     band : tuple[float, float]
-        (low_hz, high_hz) passband for time-domain Butterworth filter.
     notch : float | None
-        Mains frequency in Hz to notch (e.g., 50 or 60). If None, disabled. Also removes 2× notch if < Nyquist.
     reref : str | None
-        If "avg", apply common average reference; otherwise no rereferencing.
     zscore : bool
-        If True, per-channel z-normalization after filtering.
-
     Returns
     -------
-    numpy.ndarray
-        Shape (n_channels, n_samples), dtype float. Preprocessed EEG with same shape as input.
+    np.ndarray of Channel
+        The same array of Channel objects with updated `clean`.
     """
-    x = np.asarray(eeg, dtype=float)
+    chs = np.asarray(eeg, dtype=object).ravel()
+    # Collect time-domain arrays from channels
+    arrs = []
+    for ch in chs:
+        sig = getattr(ch, "clean", None)
+        if sig is None:
+            raise ValueError("All channels must have a non-None `clean` array")
+        arrs.append(np.asarray(sig, dtype=float).ravel())
+    nset = {a.shape[0] for a in arrs}
+    if len(nset) != 1:
+        raise ValueError("All channels must have the same number of samples")
+    x = np.vstack(arrs)
+
+    # Sampling rate
+    if fs is None:
+        fss = {float(getattr(ch, "fs")) for ch in chs}
+        if len(fss) != 1:
+            raise ValueError("Channels must share the same sampling rate or pass `fs` explicitly")
+        fs_use = fss.pop()
+    else:
+        fs_use = float(fs)
+
+    # Detrend, notch (optional), bandpass, reref, zscore
     x = signal.detrend(x, axis=1, type="constant")
     if notch is not None:
-        b, a = signal.iirnotch(notch / (fs / 2.0), 30.0)
+        b, a = signal.iirnotch(notch / (fs_use / 2.0), 30.0)
         x = signal.filtfilt(b, a, x, axis=1)
         h = 2.0 * notch
-        if h < fs * 0.49:
-            b, a = signal.iirnotch(h / (fs / 2.0), 30.0)
+        if h < fs_use * 0.49:
+            b, a = signal.iirnotch(h / (fs_use / 2.0), 30.0)
             x = signal.filtfilt(b, a, x, axis=1)
-    wp = (band[0] / (fs / 2.0), band[1] / (fs / 2.0))
+    wp = (band[0] / (fs_use / 2.0), band[1] / (fs_use / 2.0))
     b, a = signal.butter(4, wp, btype="band")
     x = signal.filtfilt(b, a, x, axis=1)
     if reref == "avg":
@@ -41,44 +58,64 @@ def preprocess_eeg(eeg, fs, band=(1.0, 40.0), notch=None, reref="avg", zscore=Tr
         m = x.mean(axis=1, keepdims=True)
         s = x.std(axis=1, keepdims=True) + 1e-8
         x = (x - m) / s
-    return x
+
+    # Write back to the channels
+    for i, ch in enumerate(chs):
+        ch.update_clean(x[i], fs_use)
+    return eeg
 
 def epoch_bandpower(eeg, fs, events, tmin, tmax, bands={"mu": (8, 12), "beta": (13, 30)}, nperseg=256):
     """
     Parameters
     ----------
-    eeg : numpy.ndarray
-        Shape (n_channels, n_samples), dtype float. Preprocessed or raw EEG.
-    fs : float or int
-        Sampling rate in Hz.
+    eeg : np.ndarray of Channel
+        Array of Channel objects; each `Channel.clean` is used.
+    fs : float | int | None
+        Sampling rate in Hz. If None, inferred from channels' `fs` (must all match).
     events : numpy.ndarray | list[int]
-        Event onsets as sample indices. Shape (n_events,), dtype int.
     tmin : float
-        Start time relative to each event in seconds (can be negative).
     tmax : float
-        End time relative to each event in seconds (must be > tmin).
     bands : dict[str, tuple[float, float]]
-        Mapping of band name -> (low_hz, high_hz). Order of values defines feature order.
     nperseg : int
-        Segment length for Welch PSD; clipped to epoch length.
-
     Returns
     -------
     feats : numpy.ndarray
-        Bandpower features per epoch. Shape (n_kept_epochs, n_channels * n_bands), dtype float.
+        Bandpower per epoch, shape (n_kept_epochs, n_channels * n_bands), dtype float.
     ev : numpy.ndarray
-        Events that were within bounds. Shape (n_kept_epochs,), dtype int.
+        Kept events (within bounds), shape (n_kept_epochs,), dtype int.
     """
-    x = np.asarray(eeg, dtype=float)
+    chs = np.asarray(eeg, dtype=object).ravel()
+    # Stack clean signals
+    arrs = []
+    for ch in chs:
+        sig = getattr(ch, "clean", None)
+        if sig is None:
+            raise ValueError("All channels must have a non-None `clean` array")
+        arrs.append(np.asarray(sig, dtype=float).ravel())
+    nset = {a.shape[0] for a in arrs}
+    if len(nset) != 1:
+        raise ValueError("All channels must have the same number of samples")
+    x = np.vstack(arrs)
+
+    # Sampling rate
+    if fs is None:
+        fss = {float(getattr(ch, "fs")) for ch in chs}
+        if len(fss) != 1:
+            raise ValueError("Channels must share the same sampling rate or pass `fs` explicitly")
+        fs_use = fss.pop()
+    else:
+        fs_use = float(fs)
+
     events = np.asarray(events, dtype=int)
-    pre = int(round(tmin * fs))
-    post = int(round(tmax * fs))
+    pre = int(round(tmin * fs_use))
+    post = int(round(tmax * fs_use))
     keep = (events + pre >= 0) & (events + post <= x.shape[1])
     ev = events[keep]
+
     feats = []
     for e in ev:
         seg = x[:, e + pre : e + post]
-        f, pxx = signal.welch(seg, fs=fs, nperseg=min(nperseg, seg.shape[1]), axis=1, average="median")
+        f, pxx = signal.welch(seg, fs=fs_use, nperseg=min(nperseg, seg.shape[1]), axis=1, average="median")
         fb = []
         for lo, hi in bands.values():
             idx = (f >= lo) & (f <= hi)

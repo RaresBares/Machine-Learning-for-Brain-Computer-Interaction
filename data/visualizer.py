@@ -227,12 +227,13 @@ class Visualizer:
 
     def time_channels(self, channels, title=None, show=True):
         """
-        Plot time-domain signals from Channel objects.
+        Plot time-domain signals from Channel objects or numeric arrays.
 
         Parameters
         ----------
-        channels : list[Channel]
-            Each must have `.clean` (shape (n,)) and `.fs` (float).
+        channels : list[Channel] or array-like
+            Each Channel must have `.clean` (shape (n,)) and `.fs` (float).
+            Or numeric array (c,n) or (n,).
         title : str, optional
             Plot title.
         show : bool, default=True
@@ -243,15 +244,27 @@ class Visualizer:
         (fig, ax) : tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
             Created matplotlib figure and axes.
         """
-        xs = []
-        labels = []
-        for ch in channels:
-            if ch.clean is not None:
-                xs.append(ch.clean)
-                labels.append(getattr(ch, "name", None))
-        X = np.vstack(xs) if len(xs) else np.empty((0, 0))
-        fs = channels[0].fs if len(channels) else None
-        return self.time(X, fs=fs, labels=labels, title=title, show=show)
+        arr = np.asarray(channels, dtype=object)
+        # Case A: array/list of Channel objects
+        if arr.dtype == object:
+            flat = arr.ravel().tolist()
+            xs = []
+            labels = []
+            for ch in flat:
+                try:
+                    sig = ch.clean
+                except AttributeError:
+                    sig = None
+                if sig is not None:
+                    xs.append(np.asarray(sig, dtype=float).ravel())
+                    name = ch.name if hasattr(ch, "name") else None
+                    labels.append(name)
+            X = np.vstack(xs) if len(xs) else np.empty((0, 0))
+            fs = flat[0].fs if len(flat) else None
+            return self.time(X, fs=fs, labels=labels, title=title, show=show)
+        # Case B: numeric array (c,n) or (n,)
+        X = self._to_2d(np.asarray(channels, dtype=float))
+        return self.time(X, fs=None, labels=None, title=title, show=show)
 
     def freq_channels(self, channels, db=True, title=None, show=True):
         """
@@ -273,12 +286,16 @@ class Visualizer:
         (fig, ax) : tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
             Created matplotlib figure and axes.
         """
+        arr = np.asarray(channels, dtype=object)
+        if arr.dtype != object:
+            raise TypeError("freq_channels expects Channel objects with .fs; for numeric arrays use Visualizer.freq(data, fs=...) directly")
+        flat = arr.ravel().tolist()
         xs = []
         labels = []
-        fs = channels[0].fs if len(channels) else None
-        for ch in channels:
+        fs = flat[0].fs if len(flat) else None
+        for ch in flat:
             if ch.clean is not None:
-                xs.append(ch.clean)
-                labels.append(getattr(ch, "name", None))
+                xs.append(np.asarray(ch.clean, dtype=float).ravel())
+                labels.append(ch.name if hasattr(ch, "name") else None)
         X = np.vstack(xs) if len(xs) else np.empty((0, 0))
         return self.freq(X, fs=fs, labels=labels, db=db, title=title, show=show)
