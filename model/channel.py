@@ -182,3 +182,4 @@ class Channel:
         f = np.fft.rfft(xw)
         psd = (np.abs(f) ** 2) / (np.sum(w ** 2) * self.fs)
         return self.freqs, psd
+
