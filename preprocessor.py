@@ -37,7 +37,10 @@ def preprocess_time_to_freq(input_time_array, dt, fc=40):
         y_128 = interp1d(freqs, fourier, kind='cubic', bounds_error=False, fill_value='extrapolate')(f_new)
         df_new = (f_new[-1] - f_new[0]) / (len(f_new) - 1) if len(f_new) > 1 else 0.0
         return y_128, f_new, df_new
+    def deMean(y):
+        return y - np.mean(y)
 
+    input_time_array = deMean(input_time_array)
     input_time_array = deTrend(input_time_array)
     input_time_array, freqs, df = getFourier(input_time_array, dt)
     input_time_array = normalize(input_time_array)
@@ -60,10 +63,3 @@ def dummy(t):
     y += np.cos(2*np.pi*t*5)
     return y
 
-
-t = np.linspace(0,4, 1000)
-y = dummy(t)
-dt = 4/1000
-fourier, freqs, df = preprocess_time_to_freq(y, dt)
-plt.plot(freqs, fourier, 'b')
-plt.show()
